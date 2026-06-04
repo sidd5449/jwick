@@ -124,6 +124,7 @@ function extractSkeleton(filePath) {
   const imports = [];
   const exports = [];
   const functions = [];
+  const namespaces = [];
 
   let isInsideBlockComment = false;
 
@@ -175,12 +176,15 @@ function extractSkeleton(filePath) {
     } else if (fileExtension === '.cs') {
       // C# imports and declarations
       if (line.startsWith('using ')) {
-        const importMatch = line.match(/using\s+([^;]+);/);
+        const importMatch = line.match(/using\s+(?:static\s+)?(?:[\w_][\w\d_]*\s*=\s*)?([\w.]+)/);
         if (importMatch) imports.push({ source: importMatch[1].trim(), items: [] });
       }
       if (line.startsWith('namespace ')) {
         const namespaceMatch = line.match(/namespace\s+([\w.]+)/);
-        if (namespaceMatch) exports.push(namespaceMatch[1]);
+        if (namespaceMatch) {
+          exports.push(namespaceMatch[1]);
+          namespaces.push(namespaceMatch[1]);
+        }
       }
       if (/^(public|private|internal|protected)?\s*(static\s+)?(class|struct|interface|enum)\s+(\w+)/.test(line)) {
         const nameMatch = line.match(/(?:class|struct|interface|enum)\s+(\w+)/);
@@ -200,7 +204,10 @@ function extractSkeleton(filePath) {
       }
       if (line.startsWith('module ') || line.startsWith('namespace ')) {
         const moduleMatch = line.match(/(?:module|namespace)\s+([\w.]+)/);
-        if (moduleMatch) exports.push(moduleMatch[1]);
+        if (moduleMatch) {
+          exports.push(moduleMatch[1]);
+          namespaces.push(moduleMatch[1]);
+        }
       }
       if (/^(type|let)\s+(\w+)/.test(line)) {
         const nameMatch = line.match(/^(?:type|let)\s+(\w+)/);
@@ -239,7 +246,8 @@ function extractSkeleton(filePath) {
     skeleton: outputLines.join('\n'),
     imports,
     exports,
-    functions
+    functions,
+    namespaces
   };
 }
 
@@ -266,11 +274,22 @@ function processDirectory(dir, mapObj = {}) {
 
 function buildDependencyMap(mapObj) {
   const dependencies = {};
-  
+  const namespaceIndex = {};
+
+  // Build namespace index for .NET source files
+  for (const [file, data] of Object.entries(mapObj)) {
+    if (data.namespaces && Array.isArray(data.namespaces)) {
+      for (const ns of data.namespaces) {
+        if (!namespaceIndex[ns]) namespaceIndex[ns] = [];
+        if (!namespaceIndex[ns].includes(file)) namespaceIndex[ns].push(file);
+      }
+    }
+  }
+
   // First pass: build dependency graph
   for (const [file, data] of Object.entries(mapObj)) {
     dependencies[file] = { imports: [], usedBy: [] };
-    
+
     if (data.imports && Array.isArray(data.imports)) {
       for (const imp of data.imports) {
         // Resolve import path
@@ -280,6 +299,20 @@ function buildDependencyMap(mapObj) {
             from: importPath,
             items: imp.items
           });
+          continue;
+        }
+
+        // Resolve .NET namespace imports to local files if possible
+        const namespaceTargets = namespaceIndex[imp.source];
+        if (namespaceTargets && namespaceTargets.length > 0) {
+          for (const target of namespaceTargets) {
+            if (!dependencies[file].imports.some(i => i.from === target)) {
+              dependencies[file].imports.push({
+                from: target,
+                items: imp.items
+              });
+            }
+          }
         }
       }
     }
