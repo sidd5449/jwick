@@ -172,6 +172,46 @@ function extractSkeleton(filePath) {
         if (line.endsWith('{')) line = line.substring(0, line.length - 1).trim() + ' { ... }';
         outputLines.push('  ' + line);
       }
+    } else if (fileExtension === '.cs') {
+      // C# imports and declarations
+      if (line.startsWith('using ')) {
+        const importMatch = line.match(/using\s+([^;]+);/);
+        if (importMatch) imports.push({ source: importMatch[1].trim(), items: [] });
+      }
+      if (line.startsWith('namespace ')) {
+        const namespaceMatch = line.match(/namespace\s+([\w.]+)/);
+        if (namespaceMatch) exports.push(namespaceMatch[1]);
+      }
+      if (/^(public|private|internal|protected)?\s*(static\s+)?(class|struct|interface|enum)\s+(\w+)/.test(line)) {
+        const nameMatch = line.match(/(?:class|struct|interface|enum)\s+(\w+)/);
+        if (nameMatch) exports.push(nameMatch[1]);
+      }
+      if (/^(public|private|internal|protected)?\s*(static\s+)?(async\s+)?[\w<>,\[\]]+\s+(\w+)\s*\(/.test(line)) {
+        const methodMatch = line.match(/^(?:public|private|internal|protected)?\s*(?:static\s+)?(?:async\s+)?[\w<>,\[\]]+\s+(\w+)\s*\(/);
+        if (methodMatch) functions.push(methodMatch[1]);
+      }
+      if (line.endsWith('{')) line = line.substring(0, line.length - 1).trim() + ' { ... }';
+      outputLines.push(line);
+      continue;
+    } else if (fileExtension === '.fs') {
+      // F# imports and declarations
+      if (line.startsWith('open ')) {
+        imports.push({ source: line.substring(5).trim(), items: [] });
+      }
+      if (line.startsWith('module ') || line.startsWith('namespace ')) {
+        const moduleMatch = line.match(/(?:module|namespace)\s+([\w.]+)/);
+        if (moduleMatch) exports.push(moduleMatch[1]);
+      }
+      if (/^(type|let)\s+(\w+)/.test(line)) {
+        const nameMatch = line.match(/^(?:type|let)\s+(\w+)/);
+        if (nameMatch) functions.push(nameMatch[1]);
+      }
+      if (/^\s*(member|let)\s+(\w+)/.test(line)) {
+        const memberMatch = line.match(/^\s*(?:member|let)\s+(\w+)/);
+        if (memberMatch) functions.push(memberMatch[1]);
+      }
+      outputLines.push(rawLine);
+      continue;
     } 
     else if (fileExtension === '.py') {
       // Python imports
@@ -213,7 +253,7 @@ function processDirectory(dir, mapObj = {}) {
       if (entry.name !== 'node_modules' && entry.name !== 'dist' && !entry.name.startsWith('.')) {
         processDirectory(fullPath, mapObj);
       }
-    } else if (entry.isFile() && /\.(js|ts|py)$/.test(entry.name)) {
+    } else if (entry.isFile() && /\.(js|ts|py|cs|fs)$/.test(entry.name)) {
       const relPath = path.relative(process.cwd(), fullPath).replace(/\\/g, '/');
       const fileData = extractSkeleton(fullPath);
       if (fileData.skeleton.trim()) {
@@ -265,7 +305,7 @@ function resolveImportPath(fromFile, importSource) {
   let resolvedPath = path.join(fromDir, importSource).replace(/\\/g, '/');
   
   // Check if import source already has an extension
-  const hasExtension = /\.(js|ts|py)$/.test(importSource);
+  const hasExtension = /\.(js|ts|py|cs|fs)$/.test(importSource);
   
   if (hasExtension) {
     // Direct path with extension - check if file exists
@@ -275,7 +315,7 @@ function resolveImportPath(fromFile, importSource) {
     }
   } else {
     // Try adding extensions
-    for (const ext of ['.js', '.ts', '.py']) {
+    for (const ext of ['.js', '.ts', '.py', '.cs', '.fs']) {
       const fullPathWithExt = path.join(process.cwd(), resolvedPath + ext);
       if (fs.existsSync(fullPathWithExt)) {
         return resolvedPath + ext;
@@ -283,7 +323,7 @@ function resolveImportPath(fromFile, importSource) {
     }
     
     // Try as directory with index file
-    for (const ext of ['.js', '.ts']) {
+    for (const ext of ['.js', '.ts', '.cs']) {
       const indexPath = path.join(process.cwd(), resolvedPath, 'index' + ext);
       if (fs.existsSync(indexPath)) {
         return resolvedPath + '/index' + ext;
@@ -412,7 +452,7 @@ function handlePencil(cmdArgs) {
   // Native Dynamic Watcher Subsystem (Zero Dependencies)
   let fsTimeout;
   fs.watch(path.resolve(config.watchTarget), { recursive: true }, (eventType, filename) => {
-    if (filename && /\.(js|ts|py)$/.test(filename)) {
+    if (filename && /\.(js|ts|py|cs|fs)$/.test(filename)) {
       // Debounce mechanics preventing execution spikes during consecutive filesaves
       clearTimeout(fsTimeout);
       fsTimeout = setTimeout(() => {
